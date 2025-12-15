@@ -1,0 +1,21 @@
+# Binaries directory (downloaded files)
+binaries/
+*.tar.gz
+*.zip
+
+# Docker volumes
+data/
+postgres-data/
+temporal-data/
+
+# Logs
+*.log
+logs/
+
+# Environment files
+.env
+.env.local
+
+# Temporary files
+tmp/
+temp/

@@ -1,0 +1,75 @@
+# Temporal Server - Air-gapped / Corporate Environment Build
+# This Dockerfile builds Temporal using binaries from Nexus or local files
+
+# Use a minimal base image that you likely have in your corporate registry
+# Replace with your corporate base image if needed
+FROM alpine:3.18
+
+# Build arguments for Nexus configuration
+ARG NEXUS_URL=http://nexus.company.com/repository/temporal
+ARG TEMPORAL_VERSION=1.24.2
+ARG DOWNLOAD_BINARIES=true
+
+# Install runtime dependencies
+RUN apk add --no-cache \
+    ca-certificates \
+    bash \
+    curl \
+    postgresql-client \
+    netcat-openbsd \
+    && rm -rf /var/cache/apk/*
+
+# Create temporal user and directories
+RUN addgroup -g 1000 temporal && \
+    adduser -D -u 1000 -G temporal temporal && \
+    mkdir -p /etc/temporal/config/dynamicconfig \
+             /var/lib/temporal \
+             /usr/local/bin && \
+    chown -R temporal:temporal /etc/temporal /var/lib/temporal
+
+WORKDIR /tmp
+
+# Option 1: Download binaries from Nexus (if DOWNLOAD_BINARIES=true)
+# Option 2: Copy from local binaries/ directory (if DOWNLOAD_BINARIES=false)
+COPY --chown=temporal:temporal binaries/* /tmp/binaries/ 2>/dev/null || true
+
+RUN if [ "$DOWNLOAD_BINARIES" = "true" ]; then \
+        echo "Downloading binaries from Nexus..."; \
+        curl -L "${NEXUS_URL}/temporal-server-${TEMPORAL_VERSION}.tar.gz" -o temporal-server.tar.gz && \
+        curl -L "${NEXUS_URL}/temporal-cli-${TEMPORAL_VERSION}.tar.gz" -o temporal-cli.tar.gz && \
+        tar -xzf temporal-server.tar.gz -C /usr/local/bin && \
+        tar -xzf temporal-cli.tar.gz -C /usr/local/bin && \
+        rm -f *.tar.gz; \
+    else \
+        echo "Using local binaries..."; \
+        if [ -f /tmp/binaries/temporal-server ]; then \
+            cp /tmp/binaries/temporal-server /usr/local/bin/; \
+        fi; \
+        if [ -f /tmp/binaries/temporal ]; then \
+            cp /tmp/binaries/temporal /usr/local/bin/; \
+        fi; \
+        if [ -f /tmp/binaries/tctl ]; then \
+            cp /tmp/binaries/tctl /usr/local/bin/; \
+        fi; \
+    fi && \
+    chmod +x /usr/local/bin/temporal* /usr/local/bin/tctl 2>/dev/null || true && \
+    rm -rf /tmp/binaries
+
+# Copy configuration files
+COPY --chown=temporal:temporal config/ /etc/temporal/config/
+
+# Create a simple SQLite-based configuration (no PostgreSQL needed)
+RUN mkdir -p /var/lib/temporal/db
+
+# Switch to temporal user
+USER temporal
+
+# Expose ports
+EXPOSE 7233 7234 7235 7236 8233
+
+# Health check
+HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
+  CMD curl -f http://localhost:8233/ || exit 1
+
+# Default command
+CMD ["temporal-server", "start"]

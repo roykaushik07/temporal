@@ -1,0 +1,19 @@
+{{- if .Values.server.podDisruptionBudget.enabled }}
+{{- $services := list "frontend" "history" "matching" "worker" }}
+{{- range $service := $services }}
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ include "temporal.fullname" $ }}-{{ $service }}
+  labels:
+    {{- include "temporal.labels" $ | nindent 4 }}
+    app.kubernetes.io/component: {{ $service }}
+spec:
+  minAvailable: {{ $.Values.server.podDisruptionBudget.minAvailable }}
+  selector:
+    matchLabels:
+      {{- include "temporal.selectorLabels" $ | nindent 6 }}
+      app.kubernetes.io/component: {{ $service }}
+{{- end }}
+{{- end }}

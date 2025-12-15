@@ -1,0 +1,60 @@
+{{- if and .Values.global.openshift.enabled .Values.global.openshift.createRoute }}
+{{- if .Values.web.route.enabled }}
+---
+apiVersion: route.openshift.io/v1
+kind: Route
+metadata:
+  name: {{ include "temporal.fullname" . }}-web
+  labels:
+    {{- include "temporal.labels" . | nindent 4 }}
+    app.kubernetes.io/component: web
+  annotations:
+    # High timeout for long-running workflows
+    haproxy.router.openshift.io/timeout: 3600s
+spec:
+  host: {{ .Values.web.route.host }}
+  {{- if .Values.web.route.tls.enabled }}
+  tls:
+    termination: {{ .Values.web.route.tls.termination }}
+    insecureEdgeTerminationPolicy: {{ .Values.web.route.tls.insecureEdgeTerminationPolicy }}
+    {{- if .Values.web.route.tls.existingSecret }}
+    certificate: |
+{{ .Values.web.route.tls.certificate | indent 6 }}
+    key: |
+{{ .Values.web.route.tls.key | indent 6 }}
+    {{- end }}
+  {{- end }}
+  to:
+    kind: Service
+    name: {{ include "temporal.fullname" . }}-web
+    weight: 100
+  port:
+    targetPort: http
+  wildcardPolicy: None
+{{- end }}
+---
+# Route for gRPC frontend service (if needed for external clients)
+apiVersion: route.openshift.io/v1
+kind: Route
+metadata:
+  name: {{ include "temporal.fullname" . }}-frontend-grpc
+  labels:
+    {{- include "temporal.labels" . | nindent 4 }}
+    app.kubernetes.io/component: frontend
+  annotations:
+    haproxy.router.openshift.io/timeout: 3600s
+spec:
+  host: temporal-grpc.apps.openshift.company.com  # Update with your domain
+  {{- if .Values.tls.enabled }}
+  tls:
+    termination: passthrough  # gRPC requires passthrough
+    insecureEdgeTerminationPolicy: Redirect
+  {{- end }}
+  to:
+    kind: Service
+    name: {{ include "temporal.fullname" . }}-frontend
+    weight: 100
+  port:
+    targetPort: rpc
+  wildcardPolicy: None
+{{- end }}

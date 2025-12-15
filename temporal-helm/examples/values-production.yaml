@@ -1,0 +1,515 @@
+# Production Environment Configuration
+# Full HA setup with security, monitoring, and AD authentication
+
+global:
+  openshift:
+    enabled: true
+    createRoute: true
+    createSCC: true
+
+  imagePullSecrets:
+    - name: temporal-registry  # If using private registry
+
+  image:
+    tag: "1.24.2"
+    pullPolicy: IfNotPresent
+
+  clusterName: "production-temporal"
+
+# High availability configuration
+server:
+  enabled: true
+
+  # Production replica counts
+  replicaCount:
+    frontend: 5
+    history: 5
+    matching: 5
+    worker: 3
+
+  # Production resource allocation
+  resources:
+    frontend:
+      requests:
+        cpu: 1000m
+        memory: 1Gi
+      limits:
+        cpu: 4000m
+        memory: 4Gi
+    history:
+      requests:
+        cpu: 2000m
+        memory: 2Gi
+      limits:
+        cpu: 8000m
+        memory: 8Gi
+    matching:
+      requests:
+        cpu: 1000m
+        memory: 1Gi
+      limits:
+        cpu: 4000m
+        memory: 4Gi
+    worker:
+      requests:
+        cpu: 1000m
+        memory: 1Gi
+      limits:
+        cpu: 2000m
+        memory: 2Gi
+
+  # Autoscaling enabled
+  autoscaling:
+    enabled: true
+    frontend:
+      minReplicas: 5
+      maxReplicas: 20
+      targetCPUUtilizationPercentage: 70
+    history:
+      minReplicas: 5
+      maxReplicas: 30
+      targetCPUUtilizationPercentage: 70
+    matching:
+      minReplicas: 5
+      maxReplicas: 20
+      targetCPUUtilizationPercentage: 70
+
+  # Pod disruption budget
+  podDisruptionBudget:
+    enabled: true
+    minAvailable: 3
+
+  config:
+    log:
+      level: info  # Production logging level
+      format: json
+
+# PostgreSQL - High Availability
+postgresql:
+  enabled: true
+
+  architecture: replication  # HA setup
+
+  auth:
+    username: temporal
+    database: temporal
+    existingSecret: temporal-db-secret
+    secretKeys:
+      userPasswordKey: password
+
+  # Primary instance
+  primary:
+    resources:
+      requests:
+        cpu: 2000m
+        memory: 4Gi
+      limits:
+        cpu: 8000m
+        memory: 16Gi
+
+    persistence:
+      enabled: true
+      storageClass: "fast-ssd"  # Use fast storage class
+      size: 500Gi
+      accessModes:
+        - ReadWriteOnce
+
+    # Production PostgreSQL tuning
+    extendedConfiguration: |
+      max_connections = 1000
+      shared_buffers = 4GB
+      effective_cache_size = 12GB
+      maintenance_work_mem = 1GB
+      checkpoint_completion_target = 0.9
+      wal_buffers = 32MB
+      default_statistics_target = 100
+      random_page_cost = 1.1
+      effective_io_concurrency = 200
+      work_mem = 8MB
+      min_wal_size = 2GB
+      max_wal_size = 8GB
+      max_worker_processes = 8
+      max_parallel_workers_per_gather = 4
+      max_parallel_workers = 8
+
+  # Read replicas
+  replication:
+    enabled: true
+    readReplicas: 3
+    synchronousCommit: "on"
+    numSynchronousReplicas: 2
+
+  # Automated backups
+  backup:
+    enabled: true
+    cronjob:
+      schedule: "0 2 * * *"  # Daily at 2 AM
+      storage:
+        size: 1000Gi
+
+  # Metrics enabled
+  metrics:
+    enabled: true
+    serviceMonitor:
+      enabled: true
+      interval: 30s
+
+# Temporal Web UI
+web:
+  enabled: true
+  replicaCount: 3
+
+  resources:
+    requests:
+      cpu: 500m
+      memory: 512Mi
+    limits:
+      cpu: 2000m
+      memory: 2Gi
+
+  route:
+    enabled: true
+    host: temporal.apps.openshift.company.com
+    tls:
+      enabled: true
+      termination: reencrypt  # Re-encrypt for end-to-end TLS
+      existingSecret: temporal-web-tls
+
+  config:
+    temporalGrpcAddress: temporal-frontend:7233
+    temporalGrpcTLS: true
+
+# TLS Configuration - Full encryption
+tls:
+  enabled: true
+
+  frontend:
+    enabled: true
+    server:
+      existingSecret: temporal-frontend-tls
+    client:
+      requireClientAuth: false
+      caSecret: temporal-client-ca
+
+  internode:
+    enabled: true
+    existingSecret: temporal-internode-tls
+    server:
+      requireClientAuth: true
+
+# Active Directory Authentication
+auth:
+  enabled: true
+
+  activeDirectory:
+    enabled: true
+
+    server:
+      host: ldap.company.com
+      port: 636
+      useSSL: true
+      useTLS: true
+      skipVerify: false  # Always verify in production
+      bindDN: "CN=temporal-service,OU=Service Accounts,DC=company,DC=com"
+      bindPasswordSecret: temporal-ad-secret
+      bindPasswordKey: ad-bind-password
+
+    user:
+      baseDN: "OU=Users,DC=company,DC=com"
+      filter: "(sAMAccountName=%s)"
+      usernameAttribute: sAMAccountName
+      emailAttribute: mail
+      displayNameAttribute: displayName
+      groupMembershipAttribute: memberOf
+
+    group:
+      baseDN: "OU=Groups,DC=company,DC=com"
+      filter: "(objectClass=group)"
+      nameAttribute: cn
+      memberAttribute: member
+
+    authorization:
+      enabled: true
+      adminGroups:
+        - "CN=Temporal-Admins,OU=Groups,DC=company,DC=com"
+      operatorGroups:
+        - "CN=Temporal-Operators,OU=Groups,DC=company,DC=com"
+      developerGroups:
+        - "CN=Temporal-Developers,OU=Groups,DC=company,DC=com"
+      readOnlyGroups:
+        - "CN=Temporal-Readers,OU=Groups,DC=company,DC=com"
+
+  authorizer:
+    enabled: true
+    jwt:
+      enabled: true
+      algorithm: RS256
+      publicKeySecret: temporal-jwt-public-key
+
+# Prometheus - Full monitoring
+prometheus:
+  enabled: true
+
+  server:
+    retention: 30d  # 30 days retention
+    persistentVolume:
+      enabled: true
+      storageClass: "standard"
+      size: 200Gi
+
+    resources:
+      requests:
+        cpu: 1000m
+        memory: 4Gi
+      limits:
+        cpu: 4000m
+        memory: 16Gi
+
+  # Alert manager for production
+  alertmanager:
+    enabled: true
+    persistentVolume:
+      enabled: true
+      size: 20Gi
+
+    config:
+      global:
+        resolve_timeout: 5m
+      route:
+        group_by: ['alertname', 'cluster', 'service']
+        group_wait: 10s
+        group_interval: 10s
+        repeat_interval: 12h
+        receiver: 'pagerduty'
+      receivers:
+        - name: 'pagerduty'
+          pagerduty_configs:
+            - service_key: 'YOUR_PAGERDUTY_KEY'
+
+  serverFiles:
+    alerting_rules.yml:
+      groups:
+        - name: temporal-critical
+          interval: 30s
+          rules:
+            - alert: TemporalServiceDown
+              expr: up{job="temporal"} == 0
+              for: 5m
+              labels:
+                severity: critical
+              annotations:
+                summary: "Temporal service {{ $labels.service }} is down"
+
+            - alert: HighWorkflowFailureRate
+              expr: rate(temporal_workflow_failed_total[5m]) > 0.1
+              for: 10m
+              labels:
+                severity: warning
+              annotations:
+                summary: "High workflow failure rate"
+
+            - alert: HighTaskQueueLag
+              expr: temporal_task_queue_lag_seconds > 600
+              for: 15m
+              labels:
+                severity: critical
+              annotations:
+                summary: "Task queue lag exceeds 10 minutes"
+
+            - alert: DatabaseConnectionsHigh
+              expr: pg_stat_database_numbackends > 800
+              for: 10m
+              labels:
+                severity: warning
+              annotations:
+                summary: "Database connections approaching limit"
+
+# Grafana - Full dashboards
+grafana:
+  enabled: true
+
+  adminUser: admin
+  adminPassword: ""  # Set via secret
+
+  persistence:
+    enabled: true
+    size: 20Gi
+
+  resources:
+    requests:
+      cpu: 500m
+      memory: 1Gi
+    limits:
+      cpu: 2000m
+      memory: 4Gi
+
+  datasources:
+    datasources.yaml:
+      apiVersion: 1
+      datasources:
+        - name: Prometheus
+          type: prometheus
+          url: http://temporal-prometheus-server:80
+          access: proxy
+          isDefault: true
+
+  dashboards:
+    temporal:
+      temporal-overview:
+        url: https://raw.githubusercontent.com/temporalio/dashboards/master/server/server_general.json
+      temporal-frontend:
+        url: https://raw.githubusercontent.com/temporalio/dashboards/master/server/frontend.json
+      temporal-history:
+        url: https://raw.githubusercontent.com/temporalio/dashboards/master/server/history.json
+      temporal-matching:
+        url: https://raw.githubusercontent.com/temporalio/dashboards/master/server/matching.json
+
+# ServiceMonitor
+serviceMonitor:
+  enabled: true
+  interval: 30s
+  scrapeTimeout: 10s
+  labels:
+    monitoring: prometheus
+
+# Network Policies - Strict
+networkPolicy:
+  enabled: true
+
+  ingress:
+    # Allow from same namespace
+    - from:
+      - podSelector: {}
+
+    # Allow from OpenShift router
+    - from:
+      - namespaceSelector:
+          matchLabels:
+            name: openshift-ingress
+
+    # Allow from monitoring
+    - from:
+      - namespaceSelector:
+          matchLabels:
+            name: openshift-monitoring
+      ports:
+        - protocol: TCP
+          port: 9090
+
+  egress:
+    # Allow DNS
+    - to:
+      - namespaceSelector:
+          matchLabels:
+            name: openshift-dns
+      ports:
+        - protocol: UDP
+          port: 53
+
+    # Allow PostgreSQL
+    - to:
+      - podSelector:
+          matchLabels:
+            app: postgresql
+      ports:
+        - protocol: TCP
+          port: 5432
+
+    # Allow Active Directory
+    - to:
+      - namespaceSelector: {}
+      ports:
+        - protocol: TCP
+          port: 636
+
+    # Allow HTTPS egress (for external APIs if needed)
+    - to:
+      - namespaceSelector: {}
+      ports:
+        - protocol: TCP
+          port: 443
+
+# Security Context - Hardened
+securityContext:
+  enabled: true
+
+  podSecurityContext:
+    runAsNonRoot: true
+    runAsUser: 1000
+    fsGroup: 1000
+    seccompProfile:
+      type: RuntimeDefault
+
+  containerSecurityContext:
+    allowPrivilegeEscalation: false
+    capabilities:
+      drop:
+        - ALL
+    readOnlyRootFilesystem: true
+
+# Production namespaces
+namespaces:
+  - default
+  - aiops-workflows
+  - monitoring-workflows
+  - data-pipelines
+
+# Dynamic configuration - Production tuned
+dynamicConfig:
+  "limit.maxIDLength":
+    - value: 255
+
+  "history.maxPageSize":
+    - value: 1000
+
+  "frontend.rps":
+    - value: 5000  # Higher rate limit
+
+  "frontend.namespaceRPS":
+    - value: 2400
+
+  "system.namespaceDefaultRetentionDays":
+    - value: 30
+
+  "system.advancedVisibilityWritingMode":
+    - value: "on"
+
+  # Task queue settings
+  "matching.numTaskqueueReadPartitions":
+    - value: 10
+  "matching.numTaskqueueWritePartitions":
+    - value: 10
+
+# Anti-affinity for HA
+affinity:
+  podAntiAffinity:
+    requiredDuringSchedulingIgnoredDuringExecution:
+      - labelSelector:
+          matchExpressions:
+            - key: app.kubernetes.io/name
+              operator: In
+              values:
+                - temporal
+        topologyKey: kubernetes.io/hostname
+
+# Node selector for dedicated nodes (optional)
+nodeSelector: {}
+  # node-role.kubernetes.io/temporal: "true"
+
+# Tolerations for dedicated nodes (optional)
+tolerations: []
+  # - key: "temporal"
+  #   operator: "Equal"
+  #   value: "true"
+  #   effect: "NoSchedule"
+
+# Archival for long-term storage (optional)
+archival:
+  enabled: false
+  history:
+    enabled: false
+    provider: s3
+    s3:
+      region: us-east-1
+      bucket: temporal-archival-prod
+      existingSecret: temporal-s3-secret

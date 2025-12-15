@@ -1,0 +1,166 @@
+{{- $services := list "frontend" "history" "matching" "worker" }}
+{{- range $service := $services }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "temporal.fullname" $ }}-{{ $service }}
+  labels:
+    {{- include "temporal.labels" $ | nindent 4 }}
+    app.kubernetes.io/component: {{ $service }}
+spec:
+  {{- if not $.Values.server.autoscaling.enabled }}
+  replicas: {{ index $.Values.server.replicaCount $service }}
+  {{- end }}
+  selector:
+    matchLabels:
+      {{- include "temporal.selectorLabels" $ | nindent 6 }}
+      app.kubernetes.io/component: {{ $service }}
+  template:
+    metadata:
+      annotations:
+        checksum/config: {{ include (print $.Template.BasePath "/server-configmap.yaml") $ | sha256sum }}
+        checksum/secret: {{ include (print $.Template.BasePath "/secrets.yaml") $ | sha256sum }}
+      labels:
+        {{- include "temporal.selectorLabels" $ | nindent 8 }}
+        app.kubernetes.io/component: {{ $service }}
+    spec:
+      {{- with $.Values.global.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      serviceAccountName: {{ include "temporal.serviceAccountName" $ }}
+      {{- if $.Values.securityContext.enabled }}
+      securityContext:
+        {{- toYaml $.Values.securityContext.podSecurityContext | nindent 8 }}
+      {{- end }}
+      initContainers:
+        - name: check-db-ready
+          image: postgres:14
+          command:
+            - sh
+            - -c
+            - |
+              until pg_isready -h {{ include "temporal.database.host" $ }} -p {{ $.Values.postgresql.primary.service.ports.postgresql | default 5432 }} -U {{ $.Values.postgresql.auth.username }}; do
+                echo "Waiting for database..."
+                sleep 2
+              done
+          {{- if $.Values.securityContext.enabled }}
+          securityContext:
+            {{- toYaml $.Values.securityContext.containerSecurityContext | nindent 12 }}
+          {{- end }}
+      containers:
+        - name: {{ $service }}
+          image: "{{ $.Values.server.image.repository }}:{{ $.Values.server.image.tag | default $.Chart.AppVersion }}"
+          imagePullPolicy: {{ $.Values.server.image.pullPolicy }}
+          env:
+            - name: SERVICES
+              value: {{ $service }}
+            - name: LOG_LEVEL
+              value: {{ $.Values.server.config.log.level }}
+            - name: TEMPORAL_CLI_ADDRESS
+              value: {{ include "temporal.fullname" $ }}-frontend:{{ $.Values.server.service.frontend.port }}
+            - name: DB_PORT
+              value: {{ $.Values.postgresql.primary.service.ports.postgresql | default 5432 | quote }}
+            - name: POSTGRES_USER
+              value: {{ $.Values.postgresql.auth.username }}
+            - name: POSTGRES_PWD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "temporal.database.secretName" $ }}
+                  key: {{ $.Values.postgresql.auth.secretKeys.userPasswordKey | default "password" }}
+            - name: POSTGRES_SEEDS
+              value: {{ include "temporal.database.host" $ }}
+            - name: DYNAMIC_CONFIG_FILE_PATH
+              value: /etc/temporal/config/dynamicconfig/dynamic_config.yaml
+            {{- if $.Values.tls.enabled }}
+            - name: TEMPORAL_TLS_REQUIRE_CLIENT_AUTH
+              value: {{ $.Values.tls.frontend.client.requireClientAuth | quote }}
+            - name: TEMPORAL_TLS_FRONTEND_CERT
+              value: /etc/temporal/config/certs/frontend/tls.crt
+            - name: TEMPORAL_TLS_FRONTEND_KEY
+              value: /etc/temporal/config/certs/frontend/tls.key
+            {{- if $.Values.tls.internode.enabled }}
+            - name: TEMPORAL_TLS_INTERNODE_SERVER_CERT
+              value: /etc/temporal/config/certs/internode/tls.crt
+            - name: TEMPORAL_TLS_INTERNODE_SERVER_KEY
+              value: /etc/temporal/config/certs/internode/tls.key
+            {{- end }}
+            {{- end }}
+          ports:
+            - name: rpc
+              containerPort: {{ index $.Values.server.service $service "port" }}
+              protocol: TCP
+            - name: metrics
+              containerPort: {{ index $.Values.server.service $service "metricsPort" }}
+              protocol: TCP
+          livenessProbe:
+            tcpSocket:
+              port: rpc
+            initialDelaySeconds: 30
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 3
+          readinessProbe:
+            tcpSocket:
+              port: rpc
+            initialDelaySeconds: 10
+            periodSeconds: 5
+            timeoutSeconds: 3
+            failureThreshold: 3
+          resources:
+            {{- toYaml (index $.Values.server.resources $service) | nindent 12 }}
+          {{- if $.Values.securityContext.enabled }}
+          securityContext:
+            {{- toYaml $.Values.securityContext.containerSecurityContext | nindent 12 }}
+          {{- end }}
+          volumeMounts:
+            - name: config
+              mountPath: /etc/temporal/config/config_template.yaml
+              subPath: config_template.yaml
+            - name: dynamic-config
+              mountPath: /etc/temporal/config/dynamicconfig
+            {{- if $.Values.tls.enabled }}
+            - name: frontend-tls
+              mountPath: /etc/temporal/config/certs/frontend
+              readOnly: true
+            {{- if $.Values.tls.internode.enabled }}
+            - name: internode-tls
+              mountPath: /etc/temporal/config/certs/internode
+              readOnly: true
+            {{- end }}
+            {{- end }}
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: config
+          configMap:
+            name: {{ include "temporal.fullname" $ }}-config
+        - name: dynamic-config
+          configMap:
+            name: {{ include "temporal.fullname" $ }}-dynamic-config
+        {{- if $.Values.tls.enabled }}
+        - name: frontend-tls
+          secret:
+            secretName: {{ $.Values.tls.frontend.server.existingSecret }}
+        {{- if $.Values.tls.internode.enabled }}
+        - name: internode-tls
+          secret:
+            secretName: {{ $.Values.tls.internode.existingSecret }}
+        {{- end }}
+        {{- end }}
+        - name: tmp
+          emptyDir: {}
+      {{- with $.Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with $.Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with $.Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+{{- end }}

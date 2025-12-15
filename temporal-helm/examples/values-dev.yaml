@@ -1,0 +1,177 @@
+# Development Environment Configuration
+# Minimal setup for development and testing
+
+global:
+  openshift:
+    enabled: true
+    createRoute: true
+    createSCC: true
+
+  image:
+    tag: "1.24.2"
+
+# Minimal replica counts for development
+server:
+  enabled: true
+
+  replicaCount:
+    frontend: 1
+    history: 1
+    matching: 1
+    worker: 1
+
+  # Lower resource requirements for dev
+  resources:
+    frontend:
+      requests:
+        cpu: 200m
+        memory: 256Mi
+      limits:
+        cpu: 1000m
+        memory: 1Gi
+    history:
+      requests:
+        cpu: 500m
+        memory: 512Mi
+      limits:
+        cpu: 2000m
+        memory: 2Gi
+    matching:
+      requests:
+        cpu: 200m
+        memory: 256Mi
+      limits:
+        cpu: 1000m
+        memory: 1Gi
+    worker:
+      requests:
+        cpu: 200m
+        memory: 256Mi
+      limits:
+        cpu: 500m
+        memory: 512Mi
+
+  # Disable autoscaling in dev
+  autoscaling:
+    enabled: false
+
+  # Disable PDB in dev
+  podDisruptionBudget:
+    enabled: false
+
+  config:
+    log:
+      level: debug  # More verbose logging for development
+
+# PostgreSQL - Single instance for dev
+postgresql:
+  enabled: true
+
+  # No replication in dev
+  architecture: standalone
+
+  auth:
+    username: temporal
+    database: temporal
+    # Password will be auto-generated
+
+  primary:
+    resources:
+      requests:
+        cpu: 500m
+        memory: 1Gi
+      limits:
+        cpu: 1000m
+        memory: 2Gi
+
+    persistence:
+      enabled: true
+      size: 20Gi  # Smaller size for dev
+
+  # Disable backups in dev
+  backup:
+    enabled: false
+
+  # Minimal metrics
+  metrics:
+    enabled: false
+
+# Temporal Web UI
+web:
+  enabled: true
+  replicaCount: 1
+
+  route:
+    enabled: true
+    host: temporal-dev.apps.openshift.company.com
+    tls:
+      enabled: true
+      termination: edge
+
+# Authentication - Disabled for dev
+auth:
+  enabled: false  # Enable later for testing
+
+# TLS - Disabled for dev (use edge termination at route)
+tls:
+  enabled: false
+
+# Monitoring - Basic setup
+prometheus:
+  enabled: true
+
+  server:
+    retention: 7d  # Shorter retention
+    persistentVolume:
+      enabled: true
+      size: 20Gi  # Smaller volume
+
+    resources:
+      requests:
+        cpu: 200m
+        memory: 1Gi
+      limits:
+        cpu: 1000m
+        memory: 4Gi
+
+  alertmanager:
+    enabled: false  # Disable alerts in dev
+
+# Grafana - Optional for dev
+grafana:
+  enabled: false
+
+# ServiceMonitor
+serviceMonitor:
+  enabled: true
+  interval: 60s  # Less frequent scraping
+
+# Network Policy - Permissive for dev
+networkPolicy:
+  enabled: false
+
+# Security Context - Basic for dev
+securityContext:
+  enabled: true
+  podSecurityContext:
+    runAsNonRoot: true
+    runAsUser: 1000
+  containerSecurityContext:
+    allowPrivilegeEscalation: false
+    capabilities:
+      drop:
+        - ALL
+
+# Namespaces
+namespaces:
+  - default
+  - dev-testing
+
+# Dynamic config - Development friendly
+dynamicConfig:
+  "limit.maxIDLength":
+    - value: 255
+  "frontend.rps":
+    - value: 1000  # Lower limit for dev
+  "system.namespaceDefaultRetentionDays":
+    - value: 7  # Shorter retention in dev

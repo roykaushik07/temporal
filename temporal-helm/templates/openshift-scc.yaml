@@ -1,0 +1,71 @@
+{{- if and .Values.global.openshift.enabled .Values.global.openshift.createSCC }}
+---
+apiVersion: security.openshift.io/v1
+kind: SecurityContextConstraints
+metadata:
+  name: {{ include "temporal.fullname" . }}-scc
+  labels:
+    {{- include "temporal.labels" . | nindent 4 }}
+  annotations:
+    kubernetes.io/description: "SCC for Temporal services with restricted permissions"
+allowHostDirVolumePlugin: false
+allowHostIPC: false
+allowHostNetwork: false
+allowHostPID: false
+allowHostPorts: false
+allowPrivilegeEscalation: false
+allowPrivilegedContainer: false
+allowedCapabilities: []
+defaultAddCapabilities: []
+fsGroup:
+  type: MustRunAs
+  ranges:
+    - min: 1000
+      max: 65535
+readOnlyRootFilesystem: true
+requiredDropCapabilities:
+  - ALL
+runAsUser:
+  type: MustRunAsRange
+  uidRangeMin: 1000
+  uidRangeMax: 65535
+seLinuxContext:
+  type: MustRunAs
+supplementalGroups:
+  type: RunAsAny
+volumes:
+  - configMap
+  - downwardAPI
+  - emptyDir
+  - persistentVolumeClaim
+  - projected
+  - secret
+users: []
+groups: []
+---
+# ServiceAccount for Temporal
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ include "temporal.serviceAccountName" . }}
+  labels:
+    {{- include "temporal.labels" . | nindent 4 }}
+{{- end }}
+---
+# RoleBinding to use the SCC
+{{- if and .Values.global.openshift.enabled .Values.global.openshift.createSCC }}
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ include "temporal.fullname" . }}-scc-binding
+  labels:
+    {{- include "temporal.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: system:openshift:scc:{{ include "temporal.fullname" . }}-scc
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "temporal.serviceAccountName" . }}
+    namespace: {{ .Release.Namespace }}
+{{- end }}

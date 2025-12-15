@@ -1,0 +1,755 @@
+# ============================================================================
+# Temporal Helm Chart Values - Production Configuration for OpenShift
+# ============================================================================
+
+# Global settings
+global:
+  # OpenShift-specific settings
+  openshift:
+    enabled: true
+    createSCC: true  # Create SecurityContextConstraints
+    createRoute: true  # Create OpenShift Routes instead of Ingress
+
+  # Image pull secrets for private registries
+  imagePullSecrets: []
+  # - name: my-registry-secret
+
+  # Temporal version
+  image:
+    tag: "1.24.2"
+    pullPolicy: IfNotPresent
+
+# ============================================================================
+# Temporal Server Configuration
+# ============================================================================
+server:
+  enabled: true
+
+  # Replication factor for high availability
+  replicaCount:
+    frontend: 3
+    history: 3
+    matching: 3
+    worker: 2
+
+  image:
+    repository: temporalio/server
+    tag: 1.24.2
+    pullPolicy: IfNotPresent
+
+  # Resource limits and requests
+  resources:
+    frontend:
+      requests:
+        cpu: 500m
+        memory: 512Mi
+      limits:
+        cpu: 2000m
+        memory: 2Gi
+    history:
+      requests:
+        cpu: 1000m
+        memory: 1Gi
+      limits:
+        cpu: 4000m
+        memory: 4Gi
+    matching:
+      requests:
+        cpu: 500m
+        memory: 512Mi
+      limits:
+        cpu: 2000m
+        memory: 2Gi
+    worker:
+      requests:
+        cpu: 500m
+        memory: 512Mi
+      limits:
+        cpu: 1000m
+        memory: 1Gi
+
+  # Autoscaling configuration
+  autoscaling:
+    enabled: true
+    frontend:
+      minReplicas: 3
+      maxReplicas: 10
+      targetCPUUtilizationPercentage: 70
+    history:
+      minReplicas: 3
+      maxReplicas: 15
+      targetCPUUtilizationPercentage: 70
+    matching:
+      minReplicas: 3
+      maxReplicas: 10
+      targetCPUUtilizationPercentage: 70
+
+  # Pod Disruption Budget for high availability
+  podDisruptionBudget:
+    enabled: true
+    minAvailable: 2
+
+  # Service configuration
+  service:
+    type: ClusterIP
+    frontend:
+      port: 7233
+      metricsPort: 9090
+    history:
+      port: 7234
+      metricsPort: 9090
+    matching:
+      port: 7235
+      metricsPort: 9090
+    worker:
+      port: 7239
+      metricsPort: 9090
+
+  # Temporal configuration
+  config:
+    # Logging configuration
+    log:
+      level: info
+      format: json
+      outputFile: stdout
+
+    # Persistence configuration
+    persistence:
+      default:
+        driver: sql
+        sql:
+          driver: postgres
+          host: temporal-postgresql
+          port: 5432
+          database: temporal
+          maxConns: 20
+          maxConnLifetime: 1h
+          existingSecret: temporal-db-secret
+          secretName: temporal-db-secret
+          user: temporal
+          passwordKey: password
+
+      visibility:
+        driver: sql
+        sql:
+          driver: postgres
+          host: temporal-postgresql
+          port: 5432
+          database: temporal_visibility
+          maxConns: 20
+          maxConnLifetime: 1h
+          existingSecret: temporal-db-secret
+          secretName: temporal-db-secret
+          user: temporal
+          passwordKey: password
+
+    # Global settings
+    global:
+      membership:
+        maxJoinDuration: 30s
+        broadcastAddress: ""
+
+      pprof:
+        port: 7936
+
+      metrics:
+        prometheus:
+          timerType: histogram
+          listenAddress: "0.0.0.0:9090"
+
+    # Service-specific settings
+    services:
+      frontend:
+        rpc:
+          grpcPort: 7233
+          membershipPort: 6933
+          bindOnIP: "0.0.0.0"
+
+      history:
+        rpc:
+          grpcPort: 7234
+          membershipPort: 6934
+          bindOnIP: "0.0.0.0"
+
+      matching:
+        rpc:
+          grpcPort: 7235
+          membershipPort: 6935
+          bindOnIP: "0.0.0.0"
+
+      worker:
+        rpc:
+          grpcPort: 7239
+          membershipPort: 6939
+          bindOnIP: "0.0.0.0"
+
+    # Dynamic configuration
+    dynamicConfigClient:
+      filepath: /etc/temporal/config/dynamicconfig/dynamic_config.yaml
+      pollInterval: 10s
+
+# ============================================================================
+# TLS Configuration
+# ============================================================================
+tls:
+  enabled: true
+
+  # Frontend TLS (client-facing)
+  frontend:
+    enabled: true
+    certManager:
+      enabled: false  # Set to true if using cert-manager
+    server:
+      # Use existing secret or create from files
+      existingSecret: temporal-frontend-tls
+      # Or specify cert and key (base64 encoded)
+      # cert: |
+      #   -----BEGIN CERTIFICATE-----
+      #   ...
+      # key: |
+      #   -----BEGIN PRIVATE KEY-----
+      #   ...
+
+    # Client certificate verification
+    client:
+      # Require client certificates
+      requireClientAuth: false
+      # CA for verifying client certificates
+      caSecret: temporal-client-ca
+
+  # Internal service communication (mTLS)
+  internode:
+    enabled: true
+    existingSecret: temporal-internode-tls
+    # Mutual TLS between services
+    server:
+      requireClientAuth: true
+    client:
+      serverName: temporal
+
+# ============================================================================
+# Authentication and Authorization - Active Directory Integration
+# ============================================================================
+auth:
+  enabled: true
+
+  # Active Directory / LDAP Configuration
+  activeDirectory:
+    enabled: true
+
+    # LDAP Server Configuration
+    server:
+      host: ldap.company.com
+      port: 636  # 389 for non-SSL, 636 for LDAPS
+      useSSL: true
+      useTLS: true
+      skipVerify: false  # Set to false in production with valid certs
+
+      # Bind credentials for LDAP queries
+      bindDN: "CN=temporal-service,OU=Service Accounts,DC=company,DC=com"
+      bindPasswordSecret: temporal-ad-secret
+      bindPasswordKey: ad-bind-password
+
+    # User search configuration
+    user:
+      baseDN: "OU=Users,DC=company,DC=com"
+      filter: "(sAMAccountName=%s)"  # %s will be replaced with username
+      # Attributes to fetch
+      usernameAttribute: sAMAccountName
+      emailAttribute: mail
+      displayNameAttribute: displayName
+      groupMembershipAttribute: memberOf
+
+    # Group search configuration
+    group:
+      baseDN: "OU=Groups,DC=company,DC=com"
+      filter: "(objectClass=group)"
+      nameAttribute: cn
+      memberAttribute: member
+
+    # Group-based authorization
+    authorization:
+      enabled: true
+      # Map AD groups to Temporal roles
+      adminGroups:
+        - "CN=Temporal-Admins,OU=Groups,DC=company,DC=com"
+        - "CN=Platform-Engineers,OU=Groups,DC=company,DC=com"
+
+      operatorGroups:
+        - "CN=Temporal-Operators,OU=Groups,DC=company,DC=com"
+
+      developerGroups:
+        - "CN=Temporal-Developers,OU=Groups,DC=company,DC=com"
+
+      readOnlyGroups:
+        - "CN=Temporal-Readers,OU=Groups,DC=company,DC=com"
+
+  # OAuth2/OIDC Configuration (Alternative to LDAP)
+  # Use this if you have ADFS or Azure AD
+  oidc:
+    enabled: false
+    issuer: "https://login.microsoftonline.com/<tenant-id>/v2.0"
+    clientId: "your-client-id"
+    clientSecretKey: oidc-client-secret
+    redirectURL: "https://temporal.company.com/auth/callback"
+    scopes:
+      - openid
+      - profile
+      - email
+    # Claims mapping
+    claims:
+      username: preferred_username
+      email: email
+      groups: groups
+
+  # Authorization plugin configuration
+  authorizer:
+    enabled: true
+    # Custom authorizer plugin (optional)
+    pluginPath: /usr/local/bin/temporal-authorizer
+    # JWT-based authorization
+    jwt:
+      enabled: true
+      algorithm: RS256
+      publicKeySecret: temporal-jwt-public-key
+
+# ============================================================================
+# Temporal Web UI Configuration
+# ============================================================================
+web:
+  enabled: true
+  replicaCount: 2
+
+  image:
+    repository: temporalio/ui
+    tag: 2.22.3
+    pullPolicy: IfNotPresent
+
+  service:
+    type: ClusterIP
+    port: 8080
+
+  resources:
+    requests:
+      cpu: 200m
+      memory: 256Mi
+    limits:
+      cpu: 500m
+      memory: 512Mi
+
+  # Web UI configuration
+  config:
+    # Temporal server connection
+    temporalGrpcAddress: temporal-frontend:7233
+    temporalGrpcTLS: true
+
+    # Authentication
+    auth:
+      enabled: true
+      providers:
+        - label: Active Directory
+          type: oidc  # or 'ldap'
+          issuer: https://login.company.com
+          client_id: temporal-web-ui
+          scope: openid profile email
+
+    # UI settings
+    defaultNamespace: default
+    showTemporalSystemNamespace: false
+
+  # Ingress / Route configuration
+  route:
+    enabled: true
+    host: temporal.apps.openshift.company.com
+    tls:
+      enabled: true
+      termination: edge  # edge, passthrough, or reencrypt
+      insecureEdgeTerminationPolicy: Redirect
+      # Use existing certificate
+      existingSecret: temporal-web-tls
+
+# ============================================================================
+# PostgreSQL Configuration
+# ============================================================================
+postgresql:
+  enabled: true
+
+  # PostgreSQL settings
+  auth:
+    username: temporal
+    password: ""  # Leave empty to generate
+    database: temporal
+    existingSecret: temporal-db-secret
+    secretKeys:
+      adminPasswordKey: postgres-password
+      userPasswordKey: password
+
+  # High availability
+  architecture: replication
+  replication:
+    enabled: true
+    readReplicas: 2
+    synchronousCommit: "on"
+    numSynchronousReplicas: 1
+
+  primary:
+    resources:
+      requests:
+        cpu: 1000m
+        memory: 2Gi
+      limits:
+        cpu: 4000m
+        memory: 8Gi
+
+    persistence:
+      enabled: true
+      storageClass: ""  # Use default storage class or specify
+      size: 100Gi
+      accessModes:
+        - ReadWriteOnce
+
+    # PostgreSQL configuration
+    extendedConfiguration: |
+      max_connections = 500
+      shared_buffers = 2GB
+      effective_cache_size = 6GB
+      maintenance_work_mem = 512MB
+      checkpoint_completion_target = 0.9
+      wal_buffers = 16MB
+      default_statistics_target = 100
+      random_page_cost = 1.1
+      effective_io_concurrency = 200
+      work_mem = 4MB
+      min_wal_size = 1GB
+      max_wal_size = 4GB
+      max_worker_processes = 4
+      max_parallel_workers_per_gather = 2
+      max_parallel_workers = 4
+      max_parallel_maintenance_workers = 2
+
+  # Backup configuration
+  backup:
+    enabled: true
+    cronjob:
+      schedule: "0 2 * * *"  # Daily at 2 AM
+      storage:
+        size: 200Gi
+
+  # Metrics
+  metrics:
+    enabled: true
+    serviceMonitor:
+      enabled: true
+      namespace: ""  # Use same namespace as temporal
+      interval: 30s
+
+  # Init DB - Create visibility database
+  initdbScripts:
+    01-create-visibility-db.sql: |
+      CREATE DATABASE temporal_visibility;
+      GRANT ALL PRIVILEGES ON DATABASE temporal_visibility TO temporal;
+
+# Use external PostgreSQL (if not using bundled)
+externalDatabase:
+  enabled: false
+  host: postgres.company.com
+  port: 5432
+  user: temporal
+  database: temporal
+  existingSecret: temporal-external-db-secret
+  passwordKey: password
+
+# ============================================================================
+# Prometheus Monitoring Configuration
+# ============================================================================
+prometheus:
+  enabled: true
+
+  server:
+    retention: 15d
+    persistentVolume:
+      enabled: true
+      size: 50Gi
+
+    resources:
+      requests:
+        cpu: 500m
+        memory: 2Gi
+      limits:
+        cpu: 2000m
+        memory: 8Gi
+
+  # Alert manager
+  alertmanager:
+    enabled: true
+    persistentVolume:
+      enabled: true
+      size: 10Gi
+
+  # Prometheus configuration
+  serverFiles:
+    alerting_rules.yml:
+      groups:
+        - name: temporal
+          interval: 30s
+          rules:
+            - alert: TemporalServiceDown
+              expr: up{job="temporal"} == 0
+              for: 5m
+              labels:
+                severity: critical
+              annotations:
+                summary: "Temporal service is down"
+                description: "Temporal {{ $labels.service }} is down"
+
+            - alert: HighTaskQueueLag
+              expr: temporal_task_queue_lag_seconds > 300
+              for: 10m
+              labels:
+                severity: warning
+              annotations:
+                summary: "High task queue lag"
+                description: "Task queue {{ $labels.task_queue }} has lag > 5 minutes"
+
+            - alert: HighWorkflowFailureRate
+              expr: rate(temporal_workflow_failed_total[5m]) > 0.1
+              for: 5m
+              labels:
+                severity: warning
+              annotations:
+                summary: "High workflow failure rate"
+                description: "Workflow failure rate is {{ $value }} per second"
+
+# ServiceMonitor for Prometheus Operator
+serviceMonitor:
+  enabled: true
+  namespace: ""  # Leave empty to use release namespace
+  interval: 30s
+  scrapeTimeout: 10s
+  labels: {}
+  # Additional labels for ServiceMonitor
+  # monitoring: prometheus
+
+# ============================================================================
+# Grafana Configuration (Optional)
+# ============================================================================
+grafana:
+  enabled: true
+
+  adminUser: admin
+  adminPassword: ""  # Leave empty to generate
+
+  persistence:
+    enabled: true
+    size: 10Gi
+
+  datasources:
+    datasources.yaml:
+      apiVersion: 1
+      datasources:
+        - name: Prometheus
+          type: prometheus
+          url: http://temporal-prometheus-server:80
+          access: proxy
+          isDefault: true
+
+  dashboardProviders:
+    dashboardproviders.yaml:
+      apiVersion: 1
+      providers:
+        - name: 'temporal'
+          orgId: 1
+          folder: 'Temporal'
+          type: file
+          disableDeletion: false
+          editable: true
+          options:
+            path: /var/lib/grafana/dashboards/temporal
+
+  dashboards:
+    temporal:
+      temporal-overview:
+        url: https://raw.githubusercontent.com/temporalio/dashboards/master/server/server_general.json
+      temporal-frontend:
+        url: https://raw.githubusercontent.com/temporalio/dashboards/master/server/frontend.json
+      temporal-history:
+        url: https://raw.githubusercontent.com/temporalio/dashboards/master/server/history.json
+      temporal-matching:
+        url: https://raw.githubusercontent.com/temporalio/dashboards/master/server/matching.json
+
+# ============================================================================
+# Network Policies
+# ============================================================================
+networkPolicy:
+  enabled: true
+
+  # Ingress rules
+  ingress:
+    # Allow from same namespace
+    - from:
+      - podSelector: {}
+
+    # Allow from OpenShift router
+    - from:
+      - namespaceSelector:
+          matchLabels:
+            name: openshift-ingress
+
+    # Allow from monitoring namespace
+    - from:
+      - namespaceSelector:
+          matchLabels:
+            name: openshift-monitoring
+      ports:
+        - protocol: TCP
+          port: 9090
+
+  # Egress rules
+  egress:
+    # Allow DNS
+    - to:
+      - namespaceSelector:
+          matchLabels:
+            name: openshift-dns
+      ports:
+        - protocol: UDP
+          port: 53
+
+    # Allow PostgreSQL
+    - to:
+      - podSelector:
+          matchLabels:
+            app: postgresql
+      ports:
+        - protocol: TCP
+          port: 5432
+
+    # Allow Active Directory
+    - to:
+      - namespaceSelector: {}
+      ports:
+        - protocol: TCP
+          port: 636  # LDAPS
+        - protocol: TCP
+          port: 389  # LDAP
+
+# ============================================================================
+# Security Context
+# ============================================================================
+securityContext:
+  enabled: true
+
+  # Pod security context
+  podSecurityContext:
+    runAsNonRoot: true
+    runAsUser: 1000
+    fsGroup: 1000
+    seccompProfile:
+      type: RuntimeDefault
+
+  # Container security context
+  containerSecurityContext:
+    allowPrivilegeEscalation: false
+    capabilities:
+      drop:
+        - ALL
+    readOnlyRootFilesystem: true
+
+# ============================================================================
+# Secrets Configuration
+# ============================================================================
+secrets:
+  # Create secrets from values (base64 encoded)
+  create: true
+
+  # Database secret
+  database:
+    password: ""  # Leave empty to auto-generate
+
+  # Active Directory bind password
+  activeDirectory:
+    bindPassword: ""  # Set this to your AD service account password
+
+  # TLS certificates
+  tls:
+    frontend:
+      cert: ""  # Base64 encoded certificate
+      key: ""   # Base64 encoded private key
+
+    internode:
+      cert: ""
+      key: ""
+
+    ca:
+      cert: ""  # Base64 encoded CA certificate
+
+# ============================================================================
+# Additional Configuration
+# ============================================================================
+
+# Namespaces to create
+namespaces:
+  - default
+  - aiops-workflows
+  - monitoring-workflows
+
+# Archive configuration (for long-term storage of closed workflows)
+archival:
+  enabled: false
+  # Configure S3, GCS, or other blob storage
+  history:
+    enabled: false
+    provider: s3
+    s3:
+      region: us-east-1
+      bucket: temporal-archival
+      endpoint: ""
+      existingSecret: temporal-s3-secret
+
+# Advanced dynamic configuration
+dynamicConfig:
+  # Workflow execution limits
+  "limit.maxIDLength":
+    - value: 255
+
+  "history.maxPageSize":
+    - value: 1000
+
+  "system.advancedVisibilityWritingMode":
+    - value: "on"
+
+  # Retention settings
+  "system.namespaceDefaultRetentionDays":
+    - value: 30
+
+  # Rate limiting
+  "frontend.rps":
+    - value: 2400
+
+  "frontend.namespaceRPS":
+    - value: 1200
+
+# Node selector for pod placement
+nodeSelector: {}
+  # node-role.kubernetes.io/worker: ""
+
+# Tolerations
+tolerations: []
+  # - key: "temporal"
+  #   operator: "Equal"
+  #   value: "true"
+  #   effect: "NoSchedule"
+
+# Affinity rules
+affinity:
+  podAntiAffinity:
+    preferredDuringSchedulingIgnoredDuringExecution:
+      - weight: 100
+        podAffinityTerm:
+          labelSelector:
+            matchExpressions:
+              - key: app
+                operator: In
+                values:
+                  - temporal
+          topologyKey: kubernetes.io/hostname

@@ -1,0 +1,240 @@
+================================================================================
+  Temporal has been installed successfully!
+================================================================================
+
+Release Name:   {{ .Release.Name }}
+Namespace:      {{ .Release.Namespace }}
+Chart Version:  {{ .Chart.Version }}
+App Version:    {{ .Chart.AppVersion }}
+
+--------------------------------------------------------------------------------
+DEPLOYMENT STATUS
+--------------------------------------------------------------------------------
+
+To check the status of your deployment:
+
+  oc get pods -n {{ .Release.Namespace }}
+
+To view the Temporal services:
+
+  oc get svc -n {{ .Release.Namespace }}
+
+--------------------------------------------------------------------------------
+ACCESSING TEMPORAL
+--------------------------------------------------------------------------------
+
+{{- if .Values.web.enabled }}
+{{- if .Values.global.openshift.createRoute }}
+
+1. Temporal Web UI (via OpenShift Route):
+
+   URL: https://{{ .Values.web.route.host }}
+
+   {{- if .Values.auth.enabled }}
+   Authentication: Active Directory (LDAP)
+   {{- else }}
+   Authentication: Disabled (configure in values.yaml for production)
+   {{- end }}
+
+{{- else }}
+
+1. Temporal Web UI (via Port Forward):
+
+   oc port-forward svc/{{ include "temporal.fullname" . }}-web 8080:{{ .Values.web.service.port }} -n {{ .Release.Namespace }}
+
+   Then access: http://localhost:8080
+
+{{- end }}
+{{- end }}
+
+2. Temporal Frontend (gRPC):
+
+   Internal: {{ include "temporal.fullname" . }}-frontend.{{ .Release.Namespace }}.svc.cluster.local:{{ .Values.server.service.frontend.port }}
+
+   Port Forward:
+   oc port-forward svc/{{ include "temporal.fullname" . }}-frontend {{ .Values.server.service.frontend.port }}:{{ .Values.server.service.frontend.port }} -n {{ .Release.Namespace }}
+
+{{- if .Values.prometheus.enabled }}
+
+3. Prometheus:
+
+   oc port-forward svc/{{ .Release.Name }}-prometheus-server 9090:80 -n {{ .Release.Namespace }}
+
+   Then access: http://localhost:9090
+
+{{- end }}
+
+{{- if .Values.grafana.enabled }}
+
+4. Grafana Dashboards:
+
+   oc port-forward svc/{{ .Release.Name }}-grafana 3000:80 -n {{ .Release.Namespace }}
+
+   Then access: http://localhost:3000
+
+   Default credentials:
+   - Username: {{ .Values.grafana.adminUser }}
+   - Password: (retrieve from secret)
+
+   Get password:
+   oc get secret {{ .Release.Name }}-grafana -n {{ .Release.Namespace }} -o jsonpath="{.data.admin-password}" | base64 --decode
+
+{{- end }}
+
+--------------------------------------------------------------------------------
+NEXT STEPS
+--------------------------------------------------------------------------------
+
+1. Verify all pods are running:
+
+   oc get pods -n {{ .Release.Namespace }} | grep {{ include "temporal.fullname" . }}
+
+2. Check logs for any errors:
+
+   oc logs -l app.kubernetes.io/component=frontend -n {{ .Release.Namespace }}
+
+3. Create Temporal namespaces:
+
+   temporal operator namespace create default
+   temporal operator namespace create my-workflows
+
+4. Register search attributes (optional):
+
+   temporal operator search-attribute create --namespace default --name CustomerId --type Keyword
+
+{{- if not .Values.auth.enabled }}
+
+5. IMPORTANT - Configure Authentication:
+
+   Active Directory authentication is currently DISABLED.
+   For production use, enable authentication in values.yaml:
+
+   auth:
+     enabled: true
+     activeDirectory:
+       enabled: true
+
+   See docs/active-directory-setup.md for detailed setup instructions.
+
+{{- end }}
+
+{{- if not .Values.tls.enabled }}
+
+6. IMPORTANT - Configure TLS:
+
+   TLS is currently DISABLED.
+   For production use, enable TLS in values.yaml:
+
+   tls:
+     enabled: true
+     frontend:
+       enabled: true
+
+   See README.md for TLS setup instructions.
+
+{{- end }}
+
+--------------------------------------------------------------------------------
+MONITORING
+--------------------------------------------------------------------------------
+
+{{- if .Values.serviceMonitor.enabled }}
+
+ServiceMonitor resources have been created for Prometheus Operator.
+
+View metrics:
+- Temporal service health: up{job="temporal"}
+- Workflow metrics: temporal_workflow_*
+- Task queue metrics: temporal_task_queue_*
+
+{{- end }}
+
+{{- if .Values.prometheus.enabled }}
+
+Prometheus alerts configured:
+- TemporalServiceDown: Alert when services are unavailable
+- HighWorkflowFailureRate: Alert on excessive workflow failures
+- HighTaskQueueLag: Alert on task queue processing delays
+
+{{- end }}
+
+--------------------------------------------------------------------------------
+DOCUMENTATION
+--------------------------------------------------------------------------------
+
+For detailed information, see:
+
+- README.md: Complete setup and configuration guide
+- docs/active-directory-setup.md: Active Directory integration
+- docs/deployment-checklist.md: Production deployment checklist
+- examples/: Example configurations for different environments
+
+--------------------------------------------------------------------------------
+SUPPORT
+--------------------------------------------------------------------------------
+
+For issues or questions:
+
+1. Check troubleshooting guide: README.md#troubleshooting
+2. View logs: oc logs <pod-name> -n {{ .Release.Namespace }}
+3. Temporal documentation: https://docs.temporal.io/
+4. Community forum: https://community.temporal.io/
+
+--------------------------------------------------------------------------------
+DATABASE INFORMATION
+--------------------------------------------------------------------------------
+
+{{- if .Values.postgresql.enabled }}
+
+PostgreSQL Database:
+- Host: {{ include "temporal.database.host" . }}
+- Port: {{ .Values.postgresql.primary.service.ports.postgresql | default 5432 }}
+- Database: {{ .Values.postgresql.auth.database }}
+- Visibility DB: temporal_visibility
+
+{{- if .Values.postgresql.backup.enabled }}
+- Backups: Enabled (Schedule: {{ .Values.postgresql.backup.cronjob.schedule }})
+{{- else }}
+- Backups: DISABLED - Enable in production!
+{{- end }}
+
+{{- else }}
+
+External Database:
+- Host: {{ .Values.externalDatabase.host }}
+- Port: {{ .Values.externalDatabase.port }}
+- Database: {{ .Values.externalDatabase.database }}
+
+{{- end }}
+
+--------------------------------------------------------------------------------
+RESOURCE USAGE
+--------------------------------------------------------------------------------
+
+Current configuration:
+
+Services:
+{{- range $service := list "frontend" "history" "matching" "worker" }}
+- {{ $service | title }}: {{ index $.Values.server.replicaCount $service }} replica(s)
+  CPU: {{ (index $.Values.server.resources $service).requests.cpu }} - {{ (index $.Values.server.resources $service).limits.cpu }}
+  Memory: {{ (index $.Values.server.resources $service).requests.memory }} - {{ (index $.Values.server.resources $service).limits.memory }}
+{{- end }}
+
+{{- if .Values.server.autoscaling.enabled }}
+
+Autoscaling: ENABLED
+- Frontend: {{ .Values.server.autoscaling.frontend.minReplicas }}-{{ .Values.server.autoscaling.frontend.maxReplicas }} replicas
+- History: {{ .Values.server.autoscaling.history.minReplicas }}-{{ .Values.server.autoscaling.history.maxReplicas }} replicas
+- Matching: {{ .Values.server.autoscaling.matching.minReplicas }}-{{ .Values.server.autoscaling.matching.maxReplicas }} replicas
+{{- else }}
+
+Autoscaling: DISABLED
+{{- end }}
+
+--------------------------------------------------------------------------------
+
+Thank you for installing Temporal!
+
+For the latest updates and documentation, visit: https://temporal.io/
+
+================================================================================

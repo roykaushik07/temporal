@@ -1,0 +1,49 @@
+{{- if .Values.serviceMonitor.enabled }}
+{{- $services := list "frontend" "history" "matching" "worker" }}
+{{- range $service := $services }}
+---
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: {{ include "temporal.fullname" $ }}-{{ $service }}
+  {{- if $.Values.serviceMonitor.namespace }}
+  namespace: {{ $.Values.serviceMonitor.namespace }}
+  {{- end }}
+  labels:
+    {{- include "temporal.labels" $ | nindent 4 }}
+    app.kubernetes.io/component: {{ $service }}
+    {{- with $.Values.serviceMonitor.labels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+spec:
+  selector:
+    matchLabels:
+      {{- include "temporal.selectorLabels" $ | nindent 6 }}
+      app.kubernetes.io/component: {{ $service }}
+  endpoints:
+    - port: metrics
+      interval: {{ $.Values.serviceMonitor.interval }}
+      scrapeTimeout: {{ $.Values.serviceMonitor.scrapeTimeout }}
+      path: /metrics
+      scheme: http
+      {{- if $.Values.tls.enabled }}
+      # Uncomment if metrics endpoint also uses TLS
+      # scheme: https
+      # tlsConfig:
+      #   insecureSkipVerify: true
+      {{- end }}
+      relabelings:
+        - sourceLabels: [__meta_kubernetes_pod_name]
+          targetLabel: pod
+        - sourceLabels: [__meta_kubernetes_namespace]
+          targetLabel: namespace
+        - sourceLabels: [__meta_kubernetes_service_name]
+          targetLabel: service
+        - targetLabel: cluster
+          replacement: {{ $.Values.global.clusterName | default "temporal-cluster" }}
+      metricRelabelings:
+        - sourceLabels: [__name__]
+          regex: 'temporal_.*'
+          action: keep
+{{- end }}
+{{- end }}
